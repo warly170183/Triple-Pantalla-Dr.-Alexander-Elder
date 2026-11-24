@@ -1,11 +1,22 @@
-<div align="center">
+# Triple Pantalla + SMC · Trading App
 
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
+App web de un solo archivo que aplica la estrategia **Triple Pantalla** del Dr. Alexander Elder con confluencia **Smart Money Concepts (SMC)**, usando datos de OKX en vivo (swaps perpetuos USDT).
 
-  <h1>Built with AI Studio</h2>
+## Uso
+Abre `index.html` en el navegador (doble clic) o sírvelo en local:
 
-  <p>The fastest path from prompt to production with Gemini.</p>
+```
+python3 -m http.server 8000
+```
 
-  <a href="https://aistudio.google.com/apps">Start building</a>
+Las llamadas a la API pública de OKX requieren ejecutarse en local (no funciona en entornos que bloqueen `fetch` a otros dominios). El botón «Datos demo» permite probarla sin red.
 
-</div>
+## Qué hace
+- **Pantalla 1 (marea):** MACD-histograma + EMA 13, Sistema Impulso.
+- **Pantalla 2 (ola):** Fuerza EMA 2 + Estocástico 5,3 contra la marea.
+- **Pantalla 3 (entrada):** orden stop sobre la última vela cerrada de ejecución, stop, TP 1,5R/2,5R/3,5R.
+- **SMC (sobre la Ola):** BOS/CHoCH, Order Blocks, FVG, EQH/EQL, barridos de liquidez, premium/descuento. Confluencia 0–4.
+- **Opciones de Trading:** operaciones A (ruptura), B (retroceso a OB/FVG) y C (barrido de liquidez), ordenadas por calidad, y ranking de la lista de activos.
+- Tamaño de posición por riesgo (2 % por defecto), escáner de lista de activos.
+
+Herramienta educativa; no es asesoramiento financiero.
