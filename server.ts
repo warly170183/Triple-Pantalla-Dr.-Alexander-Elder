@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import express from 'express';
 import type { Request, Response } from 'express';
+import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -9,6 +10,8 @@ const __dirname = path.dirname(__filename);
 
 const PORT = Number(process.env.PORT) || 3000;
 const isProd = process.env.NODE_ENV === 'production';
+const EVAL_FILE = path.resolve(__dirname, '.eval-history.json');
+const EVAL_MAX = 500;
 
 interface TelegramAlertBody {
   symbol?: unknown;
@@ -57,9 +60,121 @@ function sanitizeNumOrStr(val: unknown): string {
   return '—';
 }
 
+interface EvalRecord {
+  id: string;
+  key: string;
+  sym: string;
+  tfs: string[];
+  opt: string;
+  name: string;
+  dir: 'long' | 'short';
+  order: 'limit' | 'stop';
+  createdTs: number;
+  createdPx: number;
+  quality: number;
+  entry: number;
+  stop: number;
+  risk: number;
+  tps: number[];
+  validMs: number;
+  holdMs: number;
+  status: 'pendiente' | 'activada' | 'cerrada' | 'no_cumplida';
+  lastT: number;
+  hit: boolean[];
+  mfe: number;
+  mae: number;
+  fill?: number;
+  activatedTs?: number;
+  closedTs?: number;
+  exit?: string;
+  exitPx?: number;
+  resultR?: number;
+  provR?: number;
+  reason?: string;
+}
+
+function isValidEvalRecord(r: unknown): r is EvalRecord {
+  if (!r || typeof r !== 'object') return false;
+  const o = r as Record<string, unknown>;
+  return (
+    typeof o.id === 'string' &&
+    o.id.length > 0 &&
+    o.id.length <= 40 &&
+    typeof o.key === 'string' &&
+    o.key.length <= 80 &&
+    typeof o.sym === 'string' &&
+    o.sym.length <= 24 &&
+    Array.isArray(o.tfs) &&
+    o.tfs.length === 3 &&
+    typeof o.opt === 'string' &&
+    o.opt.length <= 4 &&
+    (o.dir === 'long' || o.dir === 'short') &&
+    typeof o.createdTs === 'number' &&
+    Number.isFinite(o.createdTs) &&
+    typeof o.entry === 'number' &&
+    Number.isFinite(o.entry) &&
+    typeof o.stop === 'number' &&
+    Number.isFinite(o.stop) &&
+    typeof o.risk === 'number' &&
+    Number.isFinite(o.risk) &&
+    (o.status === 'pendiente' ||
+      o.status === 'activada' ||
+      o.status === 'cerrada' ||
+      o.status === 'no_cumplida')
+  );
+}
+
+function loadEvalStore(): EvalRecord[] {
+  try {
+    if (!fs.existsSync(EVAL_FILE)) return [];
+    const parsed = JSON.parse(fs.readFileSync(EVAL_FILE, 'utf8'));
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(isValidEvalRecord).slice(-EVAL_MAX);
+  } catch {
+    return [];
+  }
+}
+
+let evalStore: EvalRecord[] = loadEvalStore();
+
+function saveEvalStore(records: EvalRecord[]) {
+  evalStore = records.slice(-EVAL_MAX);
+  try {
+    fs.writeFileSync(EVAL_FILE, JSON.stringify(evalStore), 'utf8');
+  } catch {
+    // Ignore ephemeral filesystem write errors
+  }
+}
+
 async function startServer() {
   const app = express();
   app.set('trust proxy', 1);
+
+  app.get('/api/eval', (_req: Request, res: Response) => {
+    res.json({ ok: true, records: evalStore });
+  });
+
+  app.post('/api/eval', express.json({ limit: '512kb' }), (req: Request, res: Response) => {
+    const clientIp = req.ip || 'unknown';
+    if (!checkRateLimit(clientIp)) {
+      res.status(429).json({ ok: false, error: 'Demasiadas peticiones.' });
+      return;
+    }
+    const body = (req.body ?? {}) as { records?: unknown };
+    if (!Array.isArray(body.records)) {
+      res.status(400).json({ ok: false, error: 'Formato inválido.' });
+      return;
+    }
+    const clean = body.records.filter(isValidEvalRecord).slice(-EVAL_MAX);
+    saveEvalStore(clean);
+    res.json({ ok: true, count: evalStore.length });
+  });
+
+  app.delete('/api/eval', (_req: Request, res: Response) => {
+    saveEvalStore([]);
+    res.json({ ok: true });
+  });
+
   app.use(express.json({ limit: '16kb' }));
 
   app.get('/api/telegram/status', (_req: Request, res: Response) => {

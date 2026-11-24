@@ -99,7 +99,7 @@ details summary{cursor:pointer;color:var(--b)}
 
 <div class="card" id="evalcard">
   <h2>Evaluación <span id="ev-pill" class="pill">—</span></h2>
-  <div class="sub" style="margin-bottom:8px">Guarda en este navegador las opciones de trading que se generan y, cuando el precio avanza, comprueba si se cumplieron y cuánto ganaron.</div>
+  <div class="sub" style="margin-bottom:8px">Registra y guarda automáticamente (en este navegador y en el servidor) las opciones de trading generadas y, conforme avanza el precio, evalúa de forma automática si se cumplieron y cuánto ganaron.</div>
   <div class="row" style="margin-top:0">
     <label class="chk"><input type="checkbox" id="ev-auto" checked> Registrar opciones automáticamente</label>
     <button type="button" id="ev-now" class="sec" style="min-height:30px;padding:4px 10px;font-size:12px">Evaluar ahora</button>
@@ -112,7 +112,7 @@ details summary{cursor:pointer;color:var(--b)}
   <div style="overflow-x:auto"><table id="ev-grp"><thead><tr><th>Grupo</th><th>Evaluadas</th><th>Cumplimiento</th><th>Acierto TP1</th><th>R medio</th><th>Índice</th></tr></thead><tbody></tbody></table></div>
   <h2 style="margin-top:14px">Historial <span class="mut" style="font-weight:400">(últimas 60)</span></h2>
   <div style="overflow-x:auto"><table id="ev-tbl"><thead><tr><th>Fecha</th><th>Activo</th><th>Opción</th><th>Dir.</th><th>Cal.</th><th>Entrada</th><th>Estado</th><th>Resultado</th><th>Índice</th></tr></thead><tbody></tbody></table></div>
-  <div class="note"><b>Cómo se evalúa:</b> solo con velas cerradas posteriores a la generación (en la temporalidad de ejecución). A y C son órdenes stop; B es límite. La orden caduca a las 6 velas de la Ola sin activarse y se invalida si toca el stop antes de entrar. Una vez dentro, se reparte 1/3 en TP1 (1,5R), 1/3 en TP2 (2,5R) y 1/3 en TP3 (3,5R); el stop cierra lo que quede (−1R) y, si en una misma vela tocan stop y objetivo, cuenta el stop. Cierre por tiempo a las 24 velas de la Ola.<br><b>Índice 0–100:</b> no cumplida = 0; cumplida = 20 + 80 × (R + 1) ÷ 3,5, limitado a 20–100 (stop completo = 20, todos los objetivos = 100). El índice global es la media de las opciones ya resueltas; las abiertas se muestran aparte como provisional. Los datos viven solo en este navegador.</div>
+  <div class="note"><b>Cómo se evalúa:</b> solo con velas cerradas posteriores a la generación (en la temporalidad de ejecución). A y C son órdenes stop; B es límite. La orden caduca a las 6 velas de la Ola sin activarse y se invalida si toca el stop antes de entrar. Una vez dentro, se reparte 1/3 en TP1 (1,5R), 1/3 en TP2 (2,5R) y 1/3 en TP3 (3,5R); el stop cierra lo que quede (−1R) y, si en una misma vela tocan stop y objetivo, cuenta el stop. Cierre por tiempo a las 24 velas de la Ola.<br><b>Índice 0–100:</b> no cumplida = 0; cumplida = 20 + 80 × (R + 1) ÷ 3,5, limitado a 20–100 (stop completo = 20, todos los objetivos = 100). El índice global es la media de las opciones ya resueltas; las abiertas se muestran aparte como provisional. El registro y la evaluación se ejecutan automáticamente y se sincronizan con el servidor.</div>
 </div>
 
 <div class="card">
@@ -568,6 +568,7 @@ async function run(){
     const closed=raw.map(r=>r.filter(b=>b.ok));
     const live=raw[2][raw[2].length-1].c;
     const R=analyze(closed[0],closed[1],closed[2],cfgNow(),live);
+    if(!demo)LAST_ANALYZE_TS[String(sym||'').trim().toUpperCase().split('-')[0]]=Date.now();
     recordOptions(sym,R,tfs,demo);
     if(run.fromAuto&&!demo)maybeAlert(sym,R,tfs);
     LAST=R;render(R,closed,sym,tfs,demo);syncDashVerdict(sym,R);
@@ -584,6 +585,7 @@ async function scan(){
     try{
       const raw=await load(s,tfs,false),c=raw.map(r=>r.filter(b=>b.ok));
       const R=analyze(c[0],c[1],c[2],cfgNow(),raw[2][raw[2].length-1].c);
+      LAST_ANALYZE_TS[String(s||'').trim().toUpperCase().split('-')[0]]=Date.now();
       if(R.opts.length)RANK.push({s,o:R.opts[0]});
       maybeAlert(s,R,tfs);
       recordOptions(s,R,tfs,false);
@@ -792,6 +794,7 @@ async function refreshDashPrices(){
     renderDash();
   }catch(e){}
 }
+const LAST_ANALYZE_TS={};
 let dashBusy=false;
 async function refreshDashVerdicts(force){
   if(dashBusy)return;
@@ -803,6 +806,7 @@ async function refreshDashVerdicts(force){
       try{
         const raw=await load(s,tfs,false),c=raw.map(r=>r.filter(b=>b.ok));
         const R=analyze(c[0],c[1],c[2],cfgNow(),raw[2][raw[2].length-1].c);
+        LAST_ANALYZE_TS[s]=Date.now();
         syncDashVerdict(s,R);
         maybeAlert(s,R,tfs);
         recordOptions(s,R,tfs,false);
@@ -814,6 +818,28 @@ async function refreshDashVerdicts(force){
       }
     }
   }finally{dashBusy=false}
+}
+let wlAutoBusy=false;
+async function autoScanWatchlist(){
+  if(wlAutoBusy||dashBusy)return;
+  wlAutoBusy=true;
+  try{
+    const tfs=PRESETS[$('preset').value];
+    const list=$('wl')?$('wl').value.split(',').map(s=>s.trim().toUpperCase().split('-')[0]).filter(Boolean):[];
+    const now=Date.now();
+    for(const s of list){
+      if(LAST_ANALYZE_TS[s]&&now-LAST_ANALYZE_TS[s]<150000)continue;
+      try{
+        const raw=await load(s,tfs,false),c=raw.map(r=>r.filter(b=>b.ok));
+        const R=analyze(c[0],c[1],c[2],cfgNow(),raw[2][raw[2].length-1].c);
+        LAST_ANALYZE_TS[s]=Date.now();
+        maybeAlert(s,R,tfs);
+        recordOptions(s,R,tfs,false);
+        syncDashVerdict(s,R);
+      }catch(e){}
+      await new Promise(r=>setTimeout(r,200));
+    }
+  }finally{wlAutoBusy=false}
 }
 
 //#EVAL-START
@@ -892,6 +918,42 @@ function evStats(list){
 }
 //#EVAL-END
 
+const _evSaveLocal=evSave;
+let evSaveTimer=null,evAfterRecTimer=null;
+function evSaveServer(){
+  clearTimeout(evSaveTimer);
+  evSaveTimer=setTimeout(()=>{
+    fetch('/api/eval',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({records:EVAL})}).catch(()=>{});
+  },250);
+}
+evSave=function(){_evSaveLocal();evSaveServer()};
+function evStatusRank(r){return r.status==='cerrada'||r.status==='no_cumplida'?3:(r.status==='activada'?2:1)}
+async function evSyncFromServer(){
+  try{
+    const r=await fetch('/api/eval');
+    const j=await r.json();
+    if(!r.ok||!j.ok||!Array.isArray(j.records))return;
+    const byId=new Map();
+    let changed=false;
+    for(const rec of EVAL)byId.set(rec.id,rec);
+    for(const srv of j.records){
+      const cur=byId.get(srv.id);
+      if(!cur){byId.set(srv.id,srv);changed=true}
+      else{
+        const sr=evStatusRank(srv),cr=evStatusRank(cur);
+        if(sr>cr||(sr===cr&&(srv.lastT||0)>(cur.lastT||0))){byId.set(srv.id,srv);changed=true}
+      }
+    }
+    const merged=[...byId.values()].sort((a,b)=>a.createdTs-b.createdTs);
+    if(changed||merged.length!==j.records.length){
+      EVAL=merged;
+      _evSaveLocal();
+      if(merged.length!==j.records.length||merged.some(m=>!j.records.find(s=>s.id===m.id)))evSaveServer();
+      renderEval();
+    }
+  }catch(e){}
+}
+
 const evSleep=ms=>new Promise(r=>setTimeout(r,ms));
 const evMap=x=>({t:+x[0],o:+x[1],h:+x[2],l:+x[3],c:+x[4],v:+x[5],ok:x[8]==='1'});
 async function evFetchSince(inst,bar,sinceTs){
@@ -907,8 +969,14 @@ let evBusy=false;
 async function evalAll(){
   if(evBusy)return;evBusy=true;
   try{
+    const active=EVAL.filter(r=>r.status==='pendiente'||r.status==='activada');
+    const hhmm=new Date().toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'});
+    if(!active.length){
+      const m=$('ev-msg');if(m)m.textContent='Auto-evaluación activa · sin pendientes ('+hhmm+')';
+      return;
+    }
     const groups={};
-    EVAL.filter(r=>r.status==='pendiente'||r.status==='activada').forEach(r=>{const k=instOf(r.sym)+'|'+r.tfs[2];(groups[k]=groups[k]||[]).push(r)});
+    active.forEach(r=>{const k=instOf(r.sym)+'|'+r.tfs[2];(groups[k]=groups[k]||[]).push(r)});
     for(const k of Object.keys(groups)){
       const[inst,bar]=k.split('|'),recs=groups[k],barMs=BAR_MS[bar]||9e5;
       let bars;try{bars=await evFetchSince(inst,bar,Math.min(...recs.map(r=>r.lastT)))}catch(e){continue}
@@ -923,12 +991,21 @@ async function evalAll(){
       await evSleep(150);
     }
     evSave();
-    const m=$('ev-msg');if(m)m.textContent='Evaluado '+new Date().toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'});
+    const rem=EVAL.filter(r=>r.status==='pendiente'||r.status==='activada').length;
+    const m=$('ev-msg');if(m)m.textContent='Evaluado automático ('+rem+' activas) · '+hhmm;
   }catch(e){}finally{evBusy=false;renderEval()}
 }
 function recordOptions(sym,R,tfs,demo){
-  if(demo||!$('ev-auto')||!$('ev-auto').checked)return;
-  if(evRecord(sym,R,tfs))renderEval();
+  if(demo||!$('ev-auto')||!$('ev-auto').checked)return 0;
+  const n=evRecord(sym,R,tfs);
+  if(n){
+    renderEval();
+    const m=$('ev-msg');
+    if(m)m.textContent='+'+n+' '+(n===1?'opción guardada':'opciones guardadas')+' automáticamente ('+new Date().toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'})+')';
+    clearTimeout(evAfterRecTimer);
+    evAfterRecTimer=setTimeout(evalAll,2500);
+  }
+  return n;
 }
 const evQb=q=>q>=70?'Alta':q>=45?'Media':'Baja';
 const evCls=v=>v==null?'mut':v>=70?'up':v>=45?'wr':'dn';
@@ -976,10 +1053,11 @@ $('ev-auto').onchange=e=>{try{localStorage.setItem('tp_eval_auto',e.target.check
 $('ev-now').onclick=()=>{$('ev-msg').textContent='Evaluando…';evalAll()};
 $('ev-copy').onclick=async()=>{try{await navigator.clipboard.writeText(evCsv());$('ev-msg').textContent='CSV copiado'}catch(e){$('ev-msg').textContent='No se pudo copiar'}};
 let evClr=0;
-$('ev-clear').onclick=()=>{const b=$('ev-clear');if(!evClr){evClr=1;b.textContent='¿Seguro? Pulsa otra vez';setTimeout(()=>{evClr=0;b.textContent='Borrar historial'},4000);return}evClr=0;b.textContent='Borrar historial';EVAL=[];evSave();renderEval()};
+$('ev-clear').onclick=()=>{const b=$('ev-clear');if(!evClr){evClr=1;b.textContent='¿Seguro? Pulsa otra vez';setTimeout(()=>{evClr=0;b.textContent='Borrar historial'},4000);return}evClr=0;b.textContent='Borrar historial';EVAL=[];_evSaveLocal();fetch('/api/eval',{method:'DELETE'}).catch(()=>{});if($('ev-msg'))$('ev-msg').textContent='Historial borrado';renderEval()};
 renderEval();
-setTimeout(evalAll,5000);
-setInterval(evalAll,60000);
+evSyncFromServer().finally(()=>setTimeout(evalAll,1500));
+setInterval(evalAll,30000);
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)evalAll()});
 
 // init
 Object.keys(PRESETS).forEach(k=>{const o=document.createElement('option');o.textContent=k;$('preset').appendChild(o)});
@@ -1002,9 +1080,12 @@ $('preset').addEventListener('change',()=>{refreshDashVerdicts(true)});
 $('sym').addEventListener('input',renderDash);
 renderDash();
 refreshDashPrices();
-refreshDashVerdicts(false);
+run();
+refreshDashVerdicts(false).finally(()=>setTimeout(evalAll,1500));
+setTimeout(autoScanWatchlist,12000);
 setInterval(refreshDashPrices,8000);
 setInterval(()=>refreshDashVerdicts(true),60000);
+setInterval(autoScanWatchlist,180000);
 function emitPerf(a,sym,tfs,demo){
   const c=cfgNow();
   const st={sym:(sym||$('sym').value||'BTC'),tfs:tfs||PRESETS[$('preset').value],demo:!!demo,capital:c.capital,riskPct:c.riskPct,maxLev:c.maxLev,verdict:a?a.verdict:'',tide:a?a.tide:'',bias:a?a.bias:'long',opts:a&&a.opts?a.opts:[],tps:a&&a.tps?a.tps:[{r:1.5,p:0},{r:2.5,p:0},{r:3.5,p:0}],structR:a?a.structR:null};
